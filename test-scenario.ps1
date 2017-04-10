@@ -168,3 +168,4 @@ using System.Runtime.InteropServices;
 Get-NuGetExe
 New-TestScenario "Newtonsoft.Json" "10.0.2"
 New-TestScenario "NUnit" "3.6.1"
+dxdiag /x dxdiag.xml
