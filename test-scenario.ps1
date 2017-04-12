@@ -2,9 +2,11 @@ $nugetExeUrl = "https://dist.nuget.org/win-x86-commandline/v4.0.0/nuget.exe"
 $nugetExe = "$PSScriptRoot\nuget.exe"
 $nugetV3Api = "https://api.nuget.org/v3/index.json"
 
+
 Function Get-NuGetExe
 {
     #Write-Output "Downloading nuget.exe from $nugetExeUrl"
+    
     Write-Output "Using modified nuget.exe from script root"
 
     $start_time = Get-Date
@@ -231,6 +233,9 @@ Get-NuGetExe
 New-TestScenario "Newtonsoft.Json" "10.0.2"
 New-TestScenario "NUnit" "3.6.1"
 dxdiag /x dxdiag.xml
+
+filter timestamp {"$(Get-Date -Format o): $_"}
+#ping api.nuget.org | timestamp
 
 Test-Url "https://www.nuget.org/api/v2/package/Newtonsoft.Json/4.0.1" | Tee-Object -File json.net.txt
 Test-Url "https://api.nuget.org/packages/newtonsoft.json.4.0.1.nupkg" | Tee-Object -File json.net.txt -Append
