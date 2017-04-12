@@ -165,7 +165,78 @@ using System.Runtime.InteropServices;
     Write-Output ""
 }
 
+function Get-Sha512Algo()
+{
+	return [System.Security.Cryptography.SHA512]::Create();
+}
+
+function Get-StreamHash([System.Security.Cryptography.HashAlgorithm]$HashAlgo, [System.IO.Stream]$Stream)
+{
+	$HashAlgo.ComputeHash($Stream);
+}
+
+function Get-ArrayHash([System.Security.Cryptography.HashAlgorithm]$HashAlgo, [Byte[]]$Bytes)
+{
+	$HashAlgo.ComputeHash($Bytes);
+}
+
+function Get-HexString([Byte[]]$Bytes)
+{
+	return ($Bytes | ForEach-Object {$_.ToString("X2")}) -join "";
+}
+
+function Get-Base64String([Byte[]]$Bytes)
+{
+	return [System.Convert]::ToBase64String($Bytes);
+}
+
+function Test-Url([string]$Url)
+{
+	Write-Output "[$((Get-Date).ToUniversalTime().ToString("O"))] $($Url):";
+	try
+	{
+		$mr = Measure-Command { $r = Invoke-WebRequest -Uri $Url };
+	}
+	catch
+	{
+		Write-Output "`tFailed to retrieve: $($_.Exception.ToString())";
+		return;
+	}
+	$sp = [System.Net.ServicePointManager]::FindServicePoint($Url);
+	Write-Output "`tTime taken      : $($mr.TotalMilliseconds) ms"
+	Write-Output "`tRawContentLength: $($r.RawContentLength) bytes";
+	if ($r.Content -is [Byte[]])
+	{
+		Write-Output "`tContent length  : $($r.Content.Length) bytes";
+		$hashBytes = Get-StreamHash -HashAlgo (Get-Sha512Algo) -Stream $r.RawContentStream;
+#		$hashBytes = Get-ArrayHash -HashAlgo (Get-Sha512Algo) -Bytes $r.Content;
+		Write-Output "`tResponse SHA512 : $(Get-HexString -Bytes $hashBytes)";
+		Write-Output "`tSHA512 Base64   : $(Get-Base64String -Bytes $hashBytes)";
+	}
+	if ($sp -ne $null -and $sp.Certificate -ne $null)
+	{
+		$cert = $sp.Certificate;
+		Write-Output "`tCert subject    : $($cert.Subject)";
+		Write-Output "`tCert issuer     : $($cert.Issuer)";
+		Write-Output "`tCert thumbprint : $($cert.GetCertHashString())";
+		Write-Output "`tCert serial No  : $($cert.GetSerialNumberString())";
+	}
+	else
+	{
+		Write-Output "`tNo cert info found..."
+	}
+}
+
 Get-NuGetExe
 New-TestScenario "Newtonsoft.Json" "10.0.2"
 New-TestScenario "NUnit" "3.6.1"
 dxdiag /x dxdiag.xml
+
+Test-Url "https://www.nuget.org/api/v2/package/Newtonsoft.Json/4.0.1" | Tee-Object -File json.net.txt
+Test-Url "https://api.nuget.org/packages/newtonsoft.json.4.0.1.nupkg" | Tee-Object -File json.net.txt -Append
+
+1..10 | ForEach-Object { Test-Url "https://api-v2v3search-0.nuget.org/query?q=karan" } | Tee-Object -File karan.txt
+$guid = (New-Guid).ToString();
+1..10 | ForEach-Object { Test-Url "https://api-v2v3search-0.nuget.org/query?q=$guid" } | Tee-Object -File guid.txt
+1..10 | ForEach-Object { Test-Url "https://www.nuget.org/packages/TestPackage19fa75eb-9384-4371-9f82-0f4348c0aad3/" } | Tee-Object -File nuget.org.txt
+1..10 | ForEach-Object { Test-Url "https://api.nuget.org/v3/registration1-gz/entityframework/index.json" } | Tee-Object -File api.nuget.org.txt
