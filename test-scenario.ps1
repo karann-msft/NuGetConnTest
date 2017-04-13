@@ -1,7 +1,13 @@
 $nugetExeUrl = "https://dist.nuget.org/win-x86-commandline/v4.0.0/nuget.exe"
 $nugetExe = "$PSScriptRoot\nuget.exe"
 $nugetV3Api = "https://api.nuget.org/v3/index.json"
+$outputDir = "$PSScriptRoot\output"
 
+New-Item -ItemType Directory -Path $outputDir | Out-Null
+
+<#
+Package restore tests
+#>
 
 Function Get-NuGetExe
 {
@@ -149,10 +155,12 @@ using System.Runtime.InteropServices;
 </Project>
 '@
 
-    Write-Output "Invoking nuget restore command: $nugetExe restore $projectFile -Verbosity detailed -OutputDirectory $packagesDir -NoCache -source $nugetV3Api"
-    & $nugetExe restore $projectFile -Verbosity detailed -OutputDirectory $packagesDir -NoCache -source $nugetV3Api | Tee-Object -Variable restoreCmdOutput
+    filter timestamp {"$(Get-Date -Format o): $_"}
 
-    $logFile = "$PSScriptRoot\TestScenario-$packageId-$packageVersion-log.txt"
+    Write-Output "Invoking nuget restore command: $nugetExe restore $projectFile -Verbosity detailed -OutputDirectory $packagesDir -NoCache -source $nugetV3Api"
+    & $nugetExe restore $projectFile -Verbosity detailed -OutputDirectory $packagesDir -NoCache -source $nugetV3Api | timestamp | Tee-Object -Variable restoreCmdOutput
+
+    $logFile = "$outputDir\TestScenario-$packageId-$packageVersion-log.txt"
     Write-Output "Creating $logFile file"
     If (Test-Path $logFile){
 	    Remove-Item $logFile -Force
@@ -166,6 +174,11 @@ using System.Runtime.InteropServices;
     Write-Output "Completed test scenario for $packageId $packageVersion"
     Write-Output ""
 }
+
+
+<#
+URL tests.
+#>
 
 function Get-Sha512Algo()
 {
@@ -229,19 +242,258 @@ function Test-Url([string]$Url)
 	}
 }
 
+
+<#
+An MTR clone for PowerShell.
+#>
+
+Function script:Set-Variables ($Target)
+{
+[int]$PingCycles = 20 #Default to 10 pings per hop; minimum of 5, maximum of 100
+[int]$BufLen = 32 #Default to 32 bytes of data in the ICMP packet, maximum of 1000 bytes
+[IPAddress]$DNSServer = $Null
+[String]$Filename = "Traceroute_$Target"
+
+$PerTraceArr = @()
+$script:ASNOwnerArr = @()
+$ASNOwnerObj = New-Object PSObject
+$ASNOwnerObj | Add-Member NoteProperty "ASN"("AS0")
+$ASNOwnerObj | Add-Member NoteProperty "ASN Owner"("EvilCorp")
+$ASNOwnerArr += $ASNOwnerObj #Add some values so the array isn't empty when first checked.
+$script:i = 0
+$script:x = 0
+$script:z = 0
+$script:WHOIS = ".origin.asn.cymru.com"
+$script:ASNWHOIS = ".asn.cymru.com"
+} #End Set-Variables
+
+Function script:Set-WindowSize {
+$Window = $Host.UI.RawUI
+  If ($Window.BufferSize.Width -lt 175 -OR $Window.WindowSize.Width -lt 175) {
+    $NewSize = $Window.BufferSize
+    $NewSize.Height = 3000
+    $NewSize.Width = 175
+    $Window.BufferSize = $NewSize
+
+    #$NewSize = $Window.WindowSize
+    #$NewSize.Height = 50
+    #$NewSize.Width = 175
+    #$Window.WindowSize = $NewSize
+  }
+} #End Set-WindowSize
+
+Function script:Get-Traceroute {
+  $script:TraceResults = Test-NetConnection $Target -InformationLevel Detailed -TraceRoute | Select -ExpandProperty TraceRoute
+} #End Get-Traceroute
+
+Function script:Resolve-ASN {
+  $HopASN = $null #Reset to null each time
+  $HopASNRecord = $null #Reset to null each time
+  If ($Hop -notlike "TimedOut" -AND $Hop -notmatch "^(?:10|127|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)\..*") { #Don't waste a lookup on RFC1918 IPs
+    $HopSplit = $Hop.Split('.')
+    $HopRev = $HopSplit[3] + '.' + $HopSplit[2] + '.' + $HopSplit[1] + '.' + $HopSplit[0]
+    $HopASNRecord = Resolve-DnsName -Server $DNSServer -Type TXT -Name $HopRev$WHOIS -ErrorAction SilentlyContinue | Select Strings
+  }
+  Else {
+    $HopASNRecord = $null
+  }
+
+  If ($HopASNRecord.Strings -AND $HopASNRecord.Strings.GetType().IsArray){ #Check for array;
+    $HopASN = "AS"+$HopASNRecord.Strings[0].Split('|').Trim()[0]
+    Write-Verbose "Object found $HopASN"
+  }
+
+  ElseIf ($HopASNRecord.Strings -AND $HopASNRecord.Strings.GetType().FullName -like "System.String"){ #Check for string; normal case.
+    $HopASN = "AS"+$HopASNRecord.Strings[0].Split('|').Trim()[0]
+    Write-Verbose "String found $HopASN"
+  }
+
+  Else {
+    $HopASN = "-"
+  }
+} #End Resolve-ASN
+
+Function script:Resolve-ASNOwner {
+  If ($HopASN -notlike "-") {  
+  $IndexNo = $ASNOwnerArr.ASN.IndexOf($HopASN)
+  Write-Verbose "Current object: $ASNOwnerObj"
+  
+    If (!($ASNOwnerArr.ASN.Contains($HopASN)) -OR ($ASNOwnerArr."ASN Owner"[$IndexNo].Contains('-'))){ #Keep "ASNOwnerArr.ASN" in double quotes so it will be treated as a string and not an object
+      Write-Verbose "ASN $HopASN not previously resolved; performing lookup" #Check the previous lookups before running this unnecessarily
+      $HopASNOwner = Resolve-DnsName -Server $DNSServer -Type TXT -Name $HopASN$ASNWHOIS -ErrorAction SilentlyContinue | Select Strings
+
+	  If ($HopASNOwner.Strings -AND $HopASNOwner.Strings.GetType().IsArray){ #Check for array;
+        $HopASNOwner = $HopASNOwner.Strings[0].Split('|').Trim()[4].Split('-')[0]
+        Write-Verbose "Object found $HopASNOwner"
+      }
+	  ElseIf ($HopASNRecord.Strings -AND $HopASNRecord.Strings.GetType().FullName -like "System.String"){ #Check for string; normal case.
+        $HopASNOwner = $HopASNOwner.Strings[0].Split('|').Trim()[4].Split('-')[0]
+        Write-Verbose "String found $HopASNOwner"
+	  }
+	  Else {
+        $HopASNOwner = "-"
+	  }
+	  $ASNOwnerObj | Add-Member NoteProperty "ASN"($HopASN) -Force
+	  $ASNOwnerObj | Add-Member NoteProperty "ASN Owner"($HopASNOwner) -Force
+	  $ASNOwnerArr += $ASNOwnerObj #Add our new value to the cache
+    }
+    Else { #We get to use a cached entry and save Team Cymru some lookups
+      Write-Verbose "ASN Owner found in cache"
+	  $HopASNOwner = $ASNOwnerArr[$IndexNo]."ASN Owner"
+    }
+  }
+  Else {
+    $HopASNOwner = "-"
+    Write-Verbose "ASN Owner lookup not performed - RFC1918 IP found or hop TimedOut"
+  }
+} #End Resolve-ASNOwner
+
+Function script:Resolve-DNS {
+$HopNameArr = $null
+$script:HopName = New-Object psobject
+  If ($Hop -notlike "TimedOut" -and $Hop -notlike "0.0.0.0") {
+    $z++ #Increment the count for the progress bar
+    $script:HopNameArr = Resolve-DnsName -Server $DNSServer -Type PTR $Hop -ErrorAction SilentlyContinue | Select NameHost
+    Write-Verbose "Hop = $Hop"
+
+    If ($HopNameArr.NameHost -AND $HopNameArr.NameHost.GetType().IsArray) { #Check for array first; sometimes resolvers are stupid and return NS records with the PTR in an array.
+      $script:HopName | Add-Member -MemberType NoteProperty -Name NameHost -Value $HopNameArr.NameHost[0] #If Resolve-DNS brings back an array containing NS records, select just the PTR
+      Write-Verbose "Object found $HopName"
+    }
+
+    ElseIf ($HopNameArr.NameHost -AND $HopNameArr.NameHost.GetType().FullName -like "System.String") { #Normal case. One PTR record. Will break up an array of multiple PTRs separated with a comma.
+      $script:HopName | Add-Member -MemberType NoteProperty -Name NameHost -Value $HopNameArr.NameHost.Split(',')[0].Trim() #In the case of multiple PTRs select the first one
+      Write-Verbose "String found $HopName"
+    }
+
+    ElseIf ($HopNameArr.NameHost -like $null) { #Check for null last because when an array is returned with PTR and NS records, it contains null values.
+      $script:HopName | Add-Member -MemberType NoteProperty -Name NameHost -Value $Hop #If there's no PTR record, set name equal to IP
+      Write-Verbose "HopNameArr apparently empty for $HopName"
+    }
+    Write-Progress -Activity "Resolving PTR Record" -Status "Looking up $Hop, Hop #$z of $($TraceResults.length)" -PercentComplete ($z / $($TraceResults.length)*100)
+  }
+  Else {
+    $z++
+    $script:HopName | Add-Member -MemberType NoteProperty -Name NameHost -Value $Hop #If the hop times out, set name equal to TimedOut
+    Write-Verbose "Hop = $Hop"
+  }
+} #End Resolve-DNS
+
+Function script:Get-PerHopRTT {
+  $PerHopRTTArr = @() #Store all RTT values per hop
+  $SAPSObj = $null #Clear the array each cycle
+  $SendICMP = New-Object System.Net.NetworkInformation.Ping
+  $i++ #Advance the count
+  $x = 0 #Reset x for the next hop count. X tracks packet loss percentage.
+  $BufferData = "a" * $BufLen #Send the UTF-8 letter "a"
+  $ByteArr = [Text.Encoding]::UTF8.GetBytes($BufferData)
+  If ($Hop -notlike "TimedOut" -and $Hop -notlike "0.0.0.0") { #Normal case, attempt to ping hop
+    For ($y = 1; $y -le $PingCycles; $y++){
+     $HopResults = $SendICMP.Send($Hop,1000,$ByteArr) #Send the packet with a 1 second timeout
+     $HopRTT = $HopResults.RoundtripTime
+     $PerHopRTTArr += $HopRTT #Add RTT to HopRTT array
+      If ($HopRTT -eq 0) {
+        $x = $x + 1
+      }
+    Write-Progress -Activity "Testing Packet Loss to Hop #$z of $($TraceResults.length)" -Status "Sending ICMP Packet $y of $PingCycles to $Hop - Result: $HopRTT ms" -PercentComplete ($y / $PingCycles*100)
+    } #End for loop
+    $PerHopRTTArr = $PerHopRTTArr | Where-Object {$_ -gt 0} #Remove zeros from the array
+    $HopRTTMin = "{0:N0}" -f ($PerHopRTTArr | Measure-Object -Minimum).Minimum
+    $HopRTTMax = "{0:N0}" -f ($PerHopRTTArr | Measure-Object -Maximum).Maximum
+    $HopRTTAvg = "{0:N0}" -f ($PerHopRTTArr | Measure-Object -Average).Average
+    $HopLoss = "{0:N1}" -f (($x / $PingCycles) * 100) + "`%"
+    $HopText = [string]$HopRTT + "ms"
+    If ($HopLoss -like "*100*") { #100% loss, but name resolves
+      $HopResults = $null
+      $HopRTT = $null
+      $HopText = $null
+      $HopRTTAvg = "-"
+      $HopRTTMin = "-"
+      $HopRTTMax = "-"
+      }
+  } #End main ping loop
+  Else { #Hop TimedOut - no ping attempted
+    $HopResults = $null
+    $HopRTT = $null
+    $HopText = $null
+    $HopLoss = "100.0%"
+    $HopRTTAvg = "-"
+    $HopRTTMin = "-"
+    $HopRTTMax = "-"
+    } #End TimedOut condition
+  $script:SAPSObj = [PSCustomObject]@{
+  "Hop" = $i
+  "Hop Name" = $HopName.NameHost
+  "ASN" = $HopASN
+  "ASN Owner" = $HopASNOwner
+  "`% Loss" = $HopLoss
+  "Hop IP" = $Hop
+  "Avg RTT" = $HopRTTAvg
+  "Min RTT" = $HopRTTMin
+  "Max RTT" = $HopRTTMax
+  }
+  $PerTraceArr += $SAPSObj #Add the object to the array
+} #End Get-PerHopRTT
+
+
+function ZipFiles( $zipfilename, $sourcedir )
+{
+   Add-Type -Assembly System.IO.Compression.FileSystem
+   $compressionLevel = [System.IO.Compression.CompressionLevel]::Optimal
+   [System.IO.Compression.ZipFile]::CreateFromDirectory($sourcedir,
+        $zipfilename, $compressionLevel, $false)
+}
+
+
+
+
+
 Get-NuGetExe
+dxdiag /x $outputDir\dxdiag.xml
 New-TestScenario "Newtonsoft.Json" "10.0.2"
 New-TestScenario "NUnit" "3.6.1"
-dxdiag /x dxdiag.xml
 
-filter timestamp {"$(Get-Date -Format o): $_"}
-#ping api.nuget.org | timestamp
+Write-Output "Testing cert `n **************************************" | Tee-Object -File $outputDir\url_tests.txt
+Test-Url "https://www.nuget.org/api/v2/package/Newtonsoft.Json/4.0.1" | Tee-Object -File $outputDir\url_tests.txt -Append
+Test-Url "https://api.nuget.org/packages/newtonsoft.json.4.0.1.nupkg" | Tee-Object -File $outputDir\url_tests.txt -Append
 
-Test-Url "https://www.nuget.org/api/v2/package/Newtonsoft.Json/4.0.1" | Tee-Object -File json.net.txt
-Test-Url "https://api.nuget.org/packages/newtonsoft.json.4.0.1.nupkg" | Tee-Object -File json.net.txt -Append
+Write-Output "Testing search `n **************************************" | Tee-Object -File $outputDir\url_tests.txt -Append
+1..10 | ForEach-Object { Test-Url "https://api-v2v3search-0.nuget.org/query?q=NuGetConnectivityTest" } | Tee-Object -File $outputDir\url_tests.txt -Append
 
-1..10 | ForEach-Object { Test-Url "https://api-v2v3search-0.nuget.org/query?q=karan" } | Tee-Object -File karan.txt
+Write-Output "Testing guid search `n **************************************" | Tee-Object -File $outputDir\url_tests.txt -Append
 $guid = (New-Guid).ToString();
-1..10 | ForEach-Object { Test-Url "https://api-v2v3search-0.nuget.org/query?q=$guid" } | Tee-Object -File guid.txt
-1..10 | ForEach-Object { Test-Url "https://www.nuget.org/packages/TestPackage19fa75eb-9384-4371-9f82-0f4348c0aad3/" } | Tee-Object -File nuget.org.txt
-1..10 | ForEach-Object { Test-Url "https://api.nuget.org/v3/registration1-gz/entityframework/index.json" } | Tee-Object -File api.nuget.org.txt
+1..10 | ForEach-Object { Test-Url "https://api-v2v3search-0.nuget.org/query?q=$guid" } | Tee-Object -File $outputDir\url_tests.txt -Append
+
+Write-Output "Testing package URL connectivity `n **************************************" | Tee-Object -File $outputDir\url_tests.txt -Append
+1..10 | ForEach-Object { Test-Url "https://www.nuget.org/packages/NuGetConnectivityTest/1.0.0-pre" } | Tee-Object -File $outputDir\url_tests.txt -Append
+
+Write-Output "Testing registration blob connectivity `n **************************************" | Tee-Object -File $outputDir\url_tests.txt -Append
+1..10 | ForEach-Object { Test-Url "https://api.nuget.org/v3/registration1-gz/entityframework/index.json" } | Tee-Object -File $outputDir\url_tests.txt -Append
+
+
+. Set-Variables "api.nuget.org"
+. Get-Traceroute
+ForEach ($Hop in $TraceResults) {
+  . Resolve-ASN
+  . Resolve-ASNOwner
+  . Resolve-DNS
+  . Get-PerHopRTT
+}
+
+$PerTraceArr | Format-Table -Autosize
+$PerTraceArr | Format-Table -Autosize | Out-File $outputDir\$Filename.txt -encoding UTF8
+
+. Set-Variables "nuget.org"
+. Get-Traceroute
+ForEach ($Hop in $TraceResults) {
+  . Resolve-ASN
+  . Resolve-ASNOwner
+  . Resolve-DNS
+  . Get-PerHopRTT
+}
+
+$PerTraceArr | Format-Table -Autosize
+$PerTraceArr | Format-Table -Autosize | Out-File $outputDir\$Filename.txt -encoding UTF8
+
+
+ZipFiles "$PSScriptRoot\output.zip" "$outputDir"
