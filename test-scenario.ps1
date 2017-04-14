@@ -158,7 +158,7 @@ using System.Runtime.InteropServices;
     filter timestamp {"$(Get-Date -Format o): $_"}
 
     Write-Output "Invoking nuget restore command: $nugetExe restore $projectFile -Verbosity detailed -OutputDirectory $packagesDir -NoCache -source $nugetV3Api"
-    & $nugetExe restore $projectFile -Verbosity detailed -OutputDirectory $packagesDir -NoCache -source $nugetV3Api | timestamp | Tee-Object -Variable restoreCmdOutput
+    & $nugetExe restore $projectFile -Verbosity detailed -OutputDirectory $packagesDir -NoCache -source $nugetV3Api -msbuildversion 4.0 | timestamp | Tee-Object -Variable restoreCmdOutput
 
     $logFile = "$outputDir\TestScenario-$packageId-$packageVersion-log.txt"
     Write-Output "Creating $logFile file"
