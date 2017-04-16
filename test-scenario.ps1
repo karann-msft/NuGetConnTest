@@ -35,7 +35,7 @@ Function New-TestScenario ($packageId, $packageVersion)
 	    Remove-Item $testDir -Force -Recurse | Out-Null
     }
     
-    & $nugetExe locals all -clear
+    #& $nugetExe locals all -clear
 
     If (Test-Path $packagesDir){
 	    Remove-Item $packagesDir -Force -Recurse | Out-Null
@@ -453,7 +453,7 @@ dxdiag /x $outputDir\dxdiag.xml
 New-TestScenario "Newtonsoft.Json" "10.0.2"
 New-TestScenario "NUnit" "3.6.1"
 
-Write-Output "Testing cert `n **************************************" | Tee-Object -File $outputDir\url_tests.txt
+Write-Output "nuget locals disabled.....Testing cert `n **************************************" | Tee-Object -File $outputDir\url_tests.txt
 Test-Url "https://www.nuget.org/api/v2/package/Newtonsoft.Json/4.0.1" | Tee-Object -File $outputDir\url_tests.txt -Append
 Test-Url "https://api.nuget.org/packages/newtonsoft.json.4.0.1.nupkg" | Tee-Object -File $outputDir\url_tests.txt -Append
 
